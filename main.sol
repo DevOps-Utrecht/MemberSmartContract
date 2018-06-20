@@ -1,15 +1,12 @@
 pragma solidity ^0.4.24;
 
 contract Voter {
-    enum Action { REMOVE_MEMBER, ADD_MEMBER }
-    
     string public subject;
-    DevOps parent;
-    address public proposal;
+    DevOps public parent;
     uint32 public count = 0;
-    Action action;
+    uint256 birthday;
     
-    mapping(address => bool) voted;
+    mapping(address => bool) public voted;
     
     modifier OnlyActiveMembers(address _a) {
         require(parent.is_member(_a));
@@ -21,21 +18,41 @@ contract Voter {
         _;
     }
     
-    constructor(address _proposal, string _subject, Action _action) public payable {
-        subject = _subject;
-        parent = DevOps(tx.origin);
-        proposal = _proposal;
-        action = _action;
+    modifier Alive() {
+        require(block.number - birthday < 40000);
+        _;
     }
     
-    //Known issue: parent contract is probably not correctly referenced.
-    function Vote() public OnlyActiveMembers(msg.sender) NotVoted(msg.sender) {
+    constructor(string _subject) public {
+        subject = _subject;
+        parent = DevOps(msg.sender);
+        birthday = block.number;
+    }
+    
+    function Vote() public OnlyActiveMembers(msg.sender) NotVoted(msg.sender) Alive() {
         count++;
         voted[msg.sender] = true;
-        if (count * 3 >= parent.get_member_count() * 2) {
-            if (action == Action.REMOVE_MEMBER)
-                parent.remove_member(proposal);
+        if (Eval()) {
+            selfdestruct(parent);
         }
+    }
+    
+    function Eval() private returns (bool);
+}
+
+contract RemoveMemberVoter is Voter {
+    address public proposal;
+    
+    constructor(address _proposal, string _subject) Voter(_subject) public {
+        proposal = _proposal;
+    }
+    
+    function Eval() private returns (bool){
+        if (count * 3 >= parent.get_member_count() * 2) {
+            parent.remove_member(proposal);
+            return true;
+        }
+        return false;
     }
 }
 
@@ -83,13 +100,12 @@ contract DevOps {
     }
     
     function add_member(address _proposal, string _name, string _role) public OnlyActiveMembers(msg.sender) {
-        Member memory m = CreateMember(_name, _role);
-        members[_proposal] = m;
+        members[_proposal] = CreateMember(_name, _role);
         emit NewMember(_proposal);
     }
     
     function propose_member_removal(address _proposal, string _subject) public OnlyActiveMembers(msg.sender) returns (address) {
-        address c = new Voter(_proposal, _subject, Voter.Action.REMOVE_MEMBER);
+        address c = new RemoveMemberVoter(_proposal, _subject);
         voters[c] = true;
         emit NewVoteContract(c);
         return c;
@@ -109,7 +125,7 @@ contract DevOps {
         return sum;
     }
     
-    function remove_member(address _a) public IsVoterContract(_a) {
+    function remove_member(address _a) public IsVoterContract(msg.sender) {
         members[_a].active = false;
     }
 }
